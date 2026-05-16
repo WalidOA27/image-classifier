@@ -179,13 +179,24 @@ sudo systemctl enable --now gpu-performance.service || warn "Ejecuta manualmente
 cat > "$VENV_DIR/run.sh" << RUNEOF
 #!/bin/bash
 source "$VENV_DIR/bin/activate"
+
+read -p "Carpeta de imágenes a procesar: " PICTURES_DIR
+PICTURES_DIR=$(realpath "$PICTURES_DIR")
+
+if [ ! -d "$PICTURES_DIR" ]; then
+    echo "Error: la carpeta no existe"
+    exit 1
+fi
+
+sed -i "s|PICTURES_DIR *= *Path(.*)|PICTURES_DIR = Path(\"$PICTURES_DIR\")|" "$VENV_DIR/paso1_describir.py"
+sed -i "s|PICTURES_DIR *= *Path(.*)|PICTURES_DIR = Path(\"$PICTURES_DIR\")|" "$VENV_DIR/paso3_clasificar.py"
+
 echo "=== Paso 1: Describir imágenes ==="
 python "$VENV_DIR/paso1_describir.py"
 echo ""
 echo "=== Paso 3: Clasificar y mover ==="
 python "$VENV_DIR/paso3_clasificar.py"
 RUNEOF
-chmod +x "$VENV_DIR/run.sh"
 
 # ── Resumen ──────────────────────────────────────────────────
 echo ""
