@@ -19,7 +19,7 @@ Clasificador local de imágenes con VLM + LLM. Sin cloud, sin APIs externas.
 ## Instalación
 
 ```bash
-git clone <repo>
+git clone https://github.com/WalidOA27/image-classifier
 cd image-classifier
 chmod +x install.sh
 ./install.sh
