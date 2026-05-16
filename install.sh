@@ -48,7 +48,6 @@ else
     log "ROCm encontrado"
 fi
 
-# Añade ROCm al PATH si no está
 if ! echo "$PATH" | grep -q "/opt/rocm/bin"; then
     echo 'export PATH=$PATH:/opt/rocm/bin' >> "$HOME/.bashrc"
     export PATH=$PATH:/opt/rocm/bin
@@ -109,19 +108,17 @@ log "Dependencias Python instaladas"
 # ── 5. Modelos ───────────────────────────────────────────────
 log "Verificando modelos..."
 
-# huggingface-cli
-if ! command -v huggingface-cli &>/dev/null; then
-    pip install --quiet huggingface_hub[cli]
-fi
-
 download_model() {
     local repo=$1
     local filename=$2
-    local dest="$MODELS_DIR/models--$(echo $repo | tr '/' '--')/snapshots/local"
+    local dest="$MODELS_DIR/models--$(echo "$repo" | tr '/' '--')/snapshots/local"
     mkdir -p "$dest"
     if [ ! -f "$dest/$filename" ]; then
         log "Descargando $filename..."
-        huggingface-cli download "$repo" "$filename" --local-dir "$dest"
+        python -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id='$repo', filename='$filename', local_dir='$dest')
+"
     else
         log "$filename ya existe, omitiendo"
     fi
@@ -138,12 +135,19 @@ log "Configurando scripts..."
 for script in paso1_describir.py paso3_clasificar.py; do
     if [ -f "$SCRIPT_DIR/$script" ]; then
         cp "$SCRIPT_DIR/$script" "$VENV_DIR/$script"
-        # Actualiza rutas
-        sed -i "s|LLAMA_BIN.*=.*|LLAMA_BIN    = Path(\"$LLAMA_BIN\")|" "$VENV_DIR/$script"
-        sed -i "s|MINICPM_GGUF.*=.*|MINICPM_GGUF = Path(\"$MINICPM_PATH\")|" "$VENV_DIR/$script"
-        sed -i "s|MMPROJ_GGUF.*=.*|MMPROJ_GGUF  = Path(\"$MMPROJ_PATH\")|" "$VENV_DIR/$script"
-        sed -i "s|QWEN_GGUF.*=.*|QWEN_GGUF    = Path(\"$QWEN_PATH\")|" "$VENV_DIR/$script" 2>/dev/null || true
-        log "$script configurado"
+        python3 - "$VENV_DIR/$script" "$LLAMA_BIN" "$MINICPM_PATH" "$MMPROJ_PATH" "$QWEN_PATH" << 'PYEOF'
+import re, sys
+path, llama, minicpm, mmproj, qwen = sys.argv[1:]
+with open(path) as f:
+    c = f.read()
+c = re.sub(r'LLAMA_BIN\s*=.*',    f'LLAMA_BIN    = Path("{llama}")',   c)
+c = re.sub(r'MINICPM_GGUF\s*=.*', f'MINICPM_GGUF = Path("{minicpm}")', c)
+c = re.sub(r'MMPROJ_GGUF\s*=.*',  f'MMPROJ_GGUF  = Path("{mmproj}")',  c)
+c = re.sub(r'QWEN_GGUF\s*=.*',    f'QWEN_GGUF    = Path("{qwen}")',    c)
+with open(path, 'w') as f:
+    f.write(c)
+print(f"  configurado: {path}")
+PYEOF
     else
         warn "$script no encontrado en $SCRIPT_DIR"
     fi
@@ -152,27 +156,27 @@ done
 # ── 7. Servicio systemd GPU performance ──────────────────────
 log "Configurando GPU en high performance..."
 
-ROCM_SMI_BIN=$(which rocm-smi 2>/dev/null || echo "/opt/rocm/bin/rocm-smi")
+ROCM_SMI_BIN=$(command -v rocm-smi 2>/dev/null || echo "/opt/rocm/bin/rocm-smi")
 
-sudo tee /etc/systemd/system/gpu-performance.service > /dev/null << EOF
+sudo tee /etc/systemd/system/gpu-performance.service > /dev/null << SVCEOF
 [Unit]
 Description=Set GPU to high performance
 After=multi-user.target
 
 [Service]
 Type=oneshot
-ExecStart=$ROCM_SMI_BIN --setperflevel high
+ExecStart=${ROCM_SMI_BIN} --setperflevel high
 RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SVCEOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now gpu-performance.service
+sudo systemctl enable --now gpu-performance.service || warn "Ejecuta manualmente: rocm-smi --setperflevel high"
 
 # ── 8. Script de ejecución ───────────────────────────────────
-cat > "$VENV_DIR/run.sh" << EOF
+cat > "$VENV_DIR/run.sh" << RUNEOF
 #!/bin/bash
 source "$VENV_DIR/bin/activate"
 echo "=== Paso 1: Describir imágenes ==="
@@ -180,7 +184,7 @@ python "$VENV_DIR/paso1_describir.py"
 echo ""
 echo "=== Paso 3: Clasificar y mover ==="
 python "$VENV_DIR/paso3_clasificar.py"
-EOF
+RUNEOF
 chmod +x "$VENV_DIR/run.sh"
 
 # ── Resumen ──────────────────────────────────────────────────
@@ -196,9 +200,4 @@ echo "    Qwen 9B : $QWEN_PATH"
 echo ""
 echo "  Para ejecutar:"
 echo "    $VENV_DIR/run.sh"
-echo ""
-echo "  O paso a paso:"
-echo "    source $VENV_DIR/bin/activate"
-echo "    python $VENV_DIR/paso1_describir.py"
-echo "    python $VENV_DIR/paso3_clasificar.py"
 echo ""
